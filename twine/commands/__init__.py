@@ -20,12 +20,15 @@ https://github.com/pypa/twine/issues/194 and https://github.com/pypa/twine/issue
 import collections
 import fnmatch
 import glob
+import logging
 import os.path
-from typing import Dict, List, NamedTuple
+from typing import DefaultDict, Dict, List, NamedTuple
 
 from twine import exceptions
 
 __all__: List[str] = []
+
+logger = logging.getLogger(__name__)
 
 
 def _group_wheel_files_first(files: List[str]) -> List[str]:
@@ -64,6 +67,18 @@ class Inputs(NamedTuple):
     attestations_by_dist: Dict[str, List[str]]
 
 
+def _files_are_identical(filenames: List[str]) -> bool:
+    with open(filenames[0], "rb") as first_file:
+        first_contents = first_file.read()
+
+    for filename in filenames[1:]:
+        with open(filename, "rb") as file:
+            if file.read() != first_contents:
+                return False
+
+    return True
+
+
 def _split_inputs(
     inputs: List[str],
 ) -> Inputs:
@@ -76,27 +91,34 @@ def _split_inputs(
     dict of ``basename -> path``, and attestations are returned as a dict of
     ``dist-path -> [attestation-path]``.
     """
+    signatures: Dict[str, str] = {}
     signature_inputs = fnmatch.filter(inputs, "*.asc")
-    signature_counts = collections.Counter(
-        os.path.basename(i) for i in signature_inputs
-    )
-    duplicate_signatures = [
-        basename for basename, count in signature_counts.items() if count > 1
-    ]
-    if duplicate_signatures:
-        # Signatures are matched to distributions by basename, so duplicates
-        # would otherwise overwrite each other silently.
-        raise exceptions.InvalidDistribution(
-            "Multiple signature files have the same name: "
-            + ", ".join(sorted(duplicate_signatures))
-        )
+    signatures_by_basename: DefaultDict[str, List[str]] = collections.defaultdict(list)
+    for signature in signature_inputs:
+        signatures_by_basename[os.path.basename(signature)].append(signature)
 
-    signatures = {os.path.basename(i): i for i in signature_inputs}
+    for basename, signature_paths in signatures_by_basename.items():
+        if len(signature_paths) == 1:
+            signatures[basename] = signature_paths[0]
+        elif _files_are_identical(signature_paths):
+            signatures[basename] = signature_paths[0]
+            logger.warning(
+                "Multiple signature files have the same name and identical "
+                "contents; using %s and ignoring %s",
+                signature_paths[0],
+                ", ".join(signature_paths[1:]),
+            )
+        else:
+            raise exceptions.InvalidDistribution(
+                "Multiple signature files have the same name but different "
+                f"contents: {basename}"
+            )
+
     attestations = fnmatch.filter(inputs, "*.*.attestation")
     dists = [
         dist
         for dist in inputs
-        if dist not in (set(signatures.values()) | set(attestations))
+        if dist not in (set(signature_inputs) | set(attestations))
     ]
 
     attestations_by_dist = {}

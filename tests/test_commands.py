@@ -1,3 +1,4 @@
+import logging
 import os
 
 import pytest
@@ -107,16 +108,58 @@ def test_split_inputs_attestations_require_filename_boundary():
     }
 
 
-def test_split_inputs_errors_on_duplicate_signature_basenames():
+def test_split_inputs_warns_on_identical_duplicate_signature_basenames(
+    tmp_path, caplog
+):
+    first_signature = tmp_path / "a" / "pkg-1.whl.asc"
+    second_signature = tmp_path / "b" / "pkg-1.whl.asc"
+    first_signature.parent.mkdir()
+    second_signature.parent.mkdir()
+    first_signature.write_bytes(b"signature")
+    second_signature.write_bytes(b"signature")
+
+    with caplog.at_level(logging.WARNING, logger="twine.commands"):
+        inputs = commands._split_inputs(
+            [
+                str(tmp_path / "a" / "pkg-1.whl"),
+                str(tmp_path / "b" / "pkg-1.whl"),
+                str(first_signature),
+                str(second_signature),
+            ]
+        )
+
+    assert inputs.signatures == {"pkg-1.whl.asc": str(first_signature)}
+    assert inputs.dists == [
+        str(tmp_path / "a" / "pkg-1.whl"),
+        str(tmp_path / "b" / "pkg-1.whl"),
+    ]
+    assert caplog.record_tuples == [
+        (
+            "twine.commands",
+            logging.WARNING,
+            "Multiple signature files have the same name and identical "
+            f"contents; using {first_signature} and ignoring {second_signature}",
+        ),
+    ]
+
+
+def test_split_inputs_errors_on_conflicting_duplicate_signature_basenames(tmp_path):
+    first_signature = tmp_path / "a" / "pkg-1.whl.asc"
+    second_signature = tmp_path / "b" / "pkg-1.whl.asc"
+    first_signature.parent.mkdir()
+    second_signature.parent.mkdir()
+    first_signature.write_bytes(b"first signature")
+    second_signature.write_bytes(b"second signature")
+
     with pytest.raises(
         exceptions.InvalidDistribution,
-        match="Multiple signature files have the same name",
+        match="Multiple signature files have the same name but different contents",
     ):
         commands._split_inputs(
             [
-                "a/pkg-1.whl",
-                "b/pkg-1.whl",
-                "a/pkg-1.whl.asc",
-                "b/pkg-1.whl.asc",
+                str(tmp_path / "a" / "pkg-1.whl"),
+                str(tmp_path / "b" / "pkg-1.whl"),
+                str(first_signature),
+                str(second_signature),
             ]
         )
