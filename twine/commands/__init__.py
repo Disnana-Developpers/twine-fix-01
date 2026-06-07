@@ -17,19 +17,14 @@ https://github.com/pypa/twine/issues/194 and https://github.com/pypa/twine/issue
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import collections
 import fnmatch
 import glob
-import logging
 import os.path
-from typing import DefaultDict, Dict, List, NamedTuple
+from typing import Dict, List, NamedTuple
 
 from twine import exceptions
 
 __all__: List[str] = []
-
-logger = logging.getLogger(__name__)
-
 
 def _group_wheel_files_first(files: List[str]) -> List[str]:
     if not any(fname for fname in files if fname.endswith(".whl")):
@@ -67,18 +62,6 @@ class Inputs(NamedTuple):
     attestations_by_dist: Dict[str, List[str]]
 
 
-def _files_are_identical(filenames: List[str]) -> bool:
-    with open(filenames[0], "rb") as first_file:
-        first_contents = first_file.read()
-
-    for filename in filenames[1:]:
-        with open(filename, "rb") as file:
-            if file.read() != first_contents:
-                return False
-
-    return True
-
-
 def _split_inputs(
     inputs: List[str],
 ) -> Inputs:
@@ -88,48 +71,52 @@ def _split_inputs(
     Three groups are returned: upload files (i.e. dists), signatures, and attestations.
 
     Upload files are returned as a linear list, signatures are returned as a
-    dict of ``basename -> path``, and attestations are returned as a dict of
+    dict of ``dist-path -> signature-path``, and attestations are returned as a dict of
     ``dist-path -> [attestation-path]``.
     """
     signatures: Dict[str, str] = {}
-    signature_inputs = fnmatch.filter(inputs, "*.asc")
-    signatures_by_basename: DefaultDict[str, List[str]] = collections.defaultdict(list)
-    for signature in signature_inputs:
-        signatures_by_basename[os.path.basename(signature)].append(signature)
-
-    for basename, signature_paths in signatures_by_basename.items():
-        if len(signature_paths) == 1:
-            signatures[basename] = signature_paths[0]
-        elif _files_are_identical(signature_paths):
-            signatures[basename] = signature_paths[0]
-            logger.warning(
-                "Multiple signature files have the same name and identical "
-                "contents; using %s and ignoring %s",
-                signature_paths[0],
-                ", ".join(signature_paths[1:]),
-            )
-        else:
-            raise exceptions.InvalidDistribution(
-                "Multiple signature files have the same name but different "
-                f"contents: {basename}"
-            )
-
+    signature_inputs = set(fnmatch.filter(inputs, "*.asc"))
     attestations = fnmatch.filter(inputs, "*.*.attestation")
+    remaining_signatures = set(signature_inputs)
+    remaining_attestations = set(attestations)
     dists = [
         dist
         for dist in inputs
-        if dist not in (set(signature_inputs) | set(attestations))
+        if dist not in (signature_inputs | set(attestations))
     ]
 
     attestations_by_dist = {}
     for dist in dists:
-        dist_basename = os.path.basename(dist)
-        attestations_by_dist[dist] = [
-            a
-            for a in attestations
-            # Attestation filenames are expected to extend the distribution
-            # filename, e.g. ``pkg.tar.gz.build.attestation``.
-            if os.path.basename(a).startswith(f"{dist_basename}.")
-        ]
+        signature = f"{dist}.asc"
+        if signature in remaining_signatures:
+            signatures[dist] = signature
+            remaining_signatures.remove(signature)
+
+        attestations_by_dist[dist] = []
+        attestation_prefix = f"{dist}."
+        for attestation in attestations:
+            if (
+                attestation in remaining_attestations
+                and attestation.startswith(attestation_prefix)
+            ):
+                attestations_by_dist[dist].append(attestation)
+                remaining_attestations.remove(attestation)
+
+    if remaining_signatures:
+        if not dists:
+            raise exceptions.InvalidDistribution(
+                "Cannot upload signed files by themselves, must upload with a "
+                "corresponding distribution file."
+            )
+        raise exceptions.InvalidDistribution(
+            "Cannot find distribution file for signature(s): "
+            + ", ".join(sorted(remaining_signatures))
+        )
+
+    if remaining_attestations:
+        raise exceptions.InvalidDistribution(
+            "Cannot find distribution file for attestation(s): "
+            + ", ".join(sorted(remaining_attestations))
+        )
 
     return Inputs(dists, signatures, attestations_by_dist)

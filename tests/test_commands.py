@@ -1,4 +1,3 @@
-import logging
 import os
 
 import pytest
@@ -77,8 +76,7 @@ def test_split_inputs():
     ]
 
     expected_signatures = {
-        os.path.basename(dist) + ".asc": dist + ".asc"
-        for dist in [helpers.WHEEL_FIXTURE, helpers.SDIST_FIXTURE]
+        dist: dist + ".asc" for dist in [helpers.WHEEL_FIXTURE, helpers.SDIST_FIXTURE]
     }
     assert inputs.signatures == expected_signatures
 
@@ -98,7 +96,6 @@ def test_split_inputs_attestations_require_filename_boundary():
     inputs = [
         dist,
         f"{dist}.build.attestation",
-        f"{dist}2.build.attestation",
     ]
 
     inputs = commands._split_inputs(inputs)
@@ -108,58 +105,48 @@ def test_split_inputs_attestations_require_filename_boundary():
     }
 
 
-def test_split_inputs_warns_on_identical_duplicate_signature_basenames(
-    tmp_path, caplog
-):
+def test_split_inputs_matches_signatures_by_distribution_path(tmp_path):
     first_signature = tmp_path / "a" / "pkg-1.whl.asc"
     second_signature = tmp_path / "b" / "pkg-1.whl.asc"
-    first_signature.parent.mkdir()
-    second_signature.parent.mkdir()
-    first_signature.write_bytes(b"signature")
-    second_signature.write_bytes(b"signature")
+    first_dist = tmp_path / "a" / "pkg-1.whl"
+    second_dist = tmp_path / "b" / "pkg-1.whl"
 
-    with caplog.at_level(logging.WARNING, logger="twine.commands"):
-        inputs = commands._split_inputs(
-            [
-                str(tmp_path / "a" / "pkg-1.whl"),
-                str(tmp_path / "b" / "pkg-1.whl"),
-                str(first_signature),
-                str(second_signature),
-            ]
-        )
+    inputs = commands._split_inputs(
+        [
+            str(first_dist),
+            str(second_dist),
+            str(first_signature),
+            str(second_signature),
+        ]
+    )
 
-    assert inputs.signatures == {"pkg-1.whl.asc": str(first_signature)}
-    assert inputs.dists == [
-        str(tmp_path / "a" / "pkg-1.whl"),
-        str(tmp_path / "b" / "pkg-1.whl"),
-    ]
-    assert caplog.record_tuples == [
-        (
-            "twine.commands",
-            logging.WARNING,
-            "Multiple signature files have the same name and identical "
-            f"contents; using {first_signature} and ignoring {second_signature}",
-        ),
-    ]
+    assert inputs.signatures == {
+        str(first_dist): str(first_signature),
+        str(second_dist): str(second_signature),
+    }
 
 
-def test_split_inputs_errors_on_conflicting_duplicate_signature_basenames(tmp_path):
-    first_signature = tmp_path / "a" / "pkg-1.whl.asc"
-    second_signature = tmp_path / "b" / "pkg-1.whl.asc"
-    first_signature.parent.mkdir()
-    second_signature.parent.mkdir()
-    first_signature.write_bytes(b"first signature")
-    second_signature.write_bytes(b"second signature")
-
+def test_split_inputs_errors_on_unmatched_signature():
     with pytest.raises(
         exceptions.InvalidDistribution,
-        match="Multiple signature files have the same name but different contents",
+        match="Cannot find distribution file for signature",
     ):
         commands._split_inputs(
             [
-                str(tmp_path / "a" / "pkg-1.whl"),
-                str(tmp_path / "b" / "pkg-1.whl"),
-                str(first_signature),
-                str(second_signature),
+                "a/pkg-1.whl",
+                "b/pkg-1.whl.asc",
+            ]
+        )
+
+
+def test_split_inputs_errors_on_unmatched_attestation():
+    with pytest.raises(
+        exceptions.InvalidDistribution,
+        match="Cannot find distribution file for attestation",
+    ):
+        commands._split_inputs(
+            [
+                "a/pkg-1.whl",
+                "b/pkg-1.whl.publish.attestation",
             ]
         )
