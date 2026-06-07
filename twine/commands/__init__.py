@@ -85,7 +85,7 @@ def _split_inputs(
         if dist not in (signature_inputs | set(attestations))
     ]
 
-    attestations_by_dist = {}
+    attestations_by_dist: Dict[str, List[str]] = {}
     for dist in dists:
         signature = f"{dist}.asc"
         if signature in remaining_signatures:
