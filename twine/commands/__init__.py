@@ -26,6 +26,7 @@ from twine import exceptions
 
 __all__: List[str] = []
 
+
 def _group_wheel_files_first(files: List[str]) -> List[str]:
     if not any(fname for fname in files if fname.endswith(".whl")):
         # Return early if there's no wheel files
@@ -80,9 +81,7 @@ def _split_inputs(
     remaining_signatures = set(signature_inputs)
     remaining_attestations = set(attestations)
     dists = [
-        dist
-        for dist in inputs
-        if dist not in (signature_inputs | set(attestations))
+        dist for dist in inputs if dist not in (signature_inputs | set(attestations))
     ]
 
     attestations_by_dist: Dict[str, List[str]] = {}
@@ -95,9 +94,8 @@ def _split_inputs(
         attestations_by_dist[dist] = []
         attestation_prefix = f"{dist}."
         for attestation in attestations:
-            if (
-                attestation in remaining_attestations
-                and attestation.startswith(attestation_prefix)
+            if attestation in remaining_attestations and attestation.startswith(
+                attestation_prefix
             ):
                 attestations_by_dist[dist].append(attestation)
                 remaining_attestations.remove(attestation)
